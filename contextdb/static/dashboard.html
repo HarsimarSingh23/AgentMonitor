@@ -1,0 +1,305 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>contextdb · agent monitor + control</title>
+<style>
+  :root {
+    --bg: #0b0e14; --panel: #11151f; --panel-2: #161b28; --line: #232a3a;
+    --text: #d7dce8; --muted: #7e879c; --accent: #5ac8fa;
+    --user_message: #4f9dff; --assistant_response: #4ade80; --system_prompt: #8b95ad;
+    --thinking: #b78bff; --tool_call: #ffb454; --function_call: #3ad6c5;
+    --context_injection: #ff6ec7; --change: #56d4ff; --error: #ff5c5c;
+    --ok: #4ade80; --warn: #ffb454; --stop: #ff5c5c;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text);
+    font: 13px/1.5 ui-monospace, "SF Mono", Menlo, Consolas, monospace; }
+  header { display: flex; align-items: center; gap: 14px; padding: 12px 18px;
+    border-bottom: 1px solid var(--line); background: var(--panel); position: sticky; top: 0; z-index: 10; }
+  header h1 { font-size: 15px; margin: 0; letter-spacing: .5px; }
+  header h1 .dot { display:inline-block; width:9px; height:9px; border-radius:50%;
+    background: var(--error); margin-right:8px; vertical-align:middle; }
+  header h1 .dot.live { background: var(--ok); box-shadow: 0 0 8px var(--ok); animation: pulse 1.6s infinite; }
+  @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.4} }
+  .spacer { flex: 1; }
+  .stats { display:flex; gap:18px; flex-wrap:wrap; }
+  .stat { text-align:right; } .stat .v { font-size:16px; font-weight:600; }
+  .stat .k { font-size:10px; color:var(--muted); text-transform:uppercase; letter-spacing:.6px; }
+  .stat .v.warn { color: var(--error); } .stat .v.ctx { color: var(--context_injection); }
+
+  /* control bar */
+  .control { background: var(--panel-2); border-bottom: 1px solid var(--line); padding: 10px 18px;
+    display:flex; gap:16px; flex-wrap:wrap; align-items:flex-start; }
+  .ctl-group { display:flex; flex-direction:column; gap:6px; }
+  .ctl-title { font-size:10px; text-transform:uppercase; letter-spacing:.7px; color:var(--muted); }
+  .pill { display:inline-flex; align-items:center; gap:8px; padding:4px 12px; border-radius:14px;
+    font-weight:700; font-size:12px; border:1px solid var(--line); }
+  .pill .b { width:9px; height:9px; border-radius:50%; }
+  .pill.running { color:var(--ok); } .pill.running .b{ background:var(--ok); box-shadow:0 0 6px var(--ok);}
+  .pill.paused  { color:var(--warn); } .pill.paused .b{ background:var(--warn); }
+  .pill.stepping{ color:var(--accent);} .pill.stepping .b{ background:var(--accent);}
+  .pill.abort   { color:var(--stop); } .pill.abort .b{ background:var(--stop);}
+  .waiting { color:var(--muted); font-size:11px; }
+  button.btn { cursor:pointer; background:#0d1320; color:var(--text); border:1px solid var(--line);
+    border-radius:6px; padding:5px 11px; font-family:inherit; font-size:12px; }
+  button.btn:hover { border-color: var(--accent); }
+  button.btn.go{ border-color:var(--ok); color:var(--ok);} button.btn.stop{ border-color:var(--stop); color:var(--stop);}
+  .row { display:flex; gap:6px; align-items:center; }
+  input.in, select.in { background:#0a0d14; color:var(--text); border:1px solid var(--line);
+    border-radius:6px; padding:4px 7px; font-family:inherit; font-size:12px; }
+  input.in { width:120px; }
+  .taglist { display:flex; gap:6px; flex-wrap:wrap; }
+  .tag { display:inline-flex; gap:6px; align-items:center; font-size:11px; padding:2px 8px;
+    border-radius:10px; border:1px solid var(--line); background:#0d1320; }
+  .tag.patch { border-color: var(--tool_call); color: var(--tool_call); }
+  .tag.bp { border-color: var(--error); color: var(--error); }
+  .tag.ctx { border-color: var(--context_injection); color: var(--context_injection); }
+  .tag .x { cursor:pointer; color:var(--muted); } .tag .x:hover{ color:var(--text); }
+
+  .filters { display:flex; gap:6px; flex-wrap:wrap; padding:8px 18px; border-bottom:1px solid var(--line); background:var(--panel); }
+  .chip { cursor:pointer; user-select:none; padding:3px 10px; border-radius:12px; border:1px solid var(--line);
+    color:var(--muted); font-size:11px; display:flex; align-items:center; gap:6px; }
+  .chip .swatch { width:8px; height:8px; border-radius:50%; }
+  .chip.on { color:var(--text); border-color:var(--accent); background:#0d1320; } .chip.off { opacity:.4; }
+
+  #feed { padding:14px 18px 60px; max-width:1100px; margin:0 auto; }
+  .ev { border-left:3px solid var(--line); background:var(--panel); border-radius:0 8px 8px 0;
+    margin:8px 0; padding:9px 12px; animation:slidein .25s ease; }
+  @keyframes slidein { from{opacity:0; transform:translateY(6px);} to{opacity:1; transform:none;} }
+  .ev .top { display:flex; align-items:center; gap:10px; }
+  .badge { font-size:10px; text-transform:uppercase; letter-spacing:.5px; padding:2px 7px;
+    border-radius:5px; font-weight:700; background:#0d1320; }
+  .name { font-weight:600; } .meta { color:var(--muted); font-size:11px; }
+  .patched { font-size:10px; color:var(--tool_call); border:1px solid var(--tool_call); border-radius:5px; padding:1px 5px; }
+  .ev .top .spacer { flex:1; } .toks { color:var(--muted); font-size:11px; } .toks b{ color:var(--text); }
+  .body { margin-top:6px; white-space:pre-wrap; word-break:break-word; color:#c2c9da; }
+  .io pre { margin:4px 0 0; background:#0a0d14; border:1px solid var(--line); border-radius:6px;
+    padding:8px; overflow:auto; max-height:220px; color:#9fb0cc; font-size:12px; }
+  details summary { cursor:pointer; color:var(--muted); font-size:11px; }
+  .err { color:var(--error); margin-top:6px; }
+  .refs { margin-top:6px; }
+  .ref { display:flex; gap:10px; align-items:baseline; padding:4px 8px; border:1px dashed var(--context_injection);
+    border-radius:6px; margin-top:4px; background:rgba(255,110,199,0.05); }
+  .ref .src { color:var(--context_injection); font-weight:600; font-size:11px; }
+  .ref .sum { flex:1; } .ref .t { color:var(--muted); font-size:11px; }
+  .sid { font-size:10px; color:var(--muted); }
+  .empty { color:var(--muted); text-align:center; margin-top:80px; }
+</style>
+</head>
+<body>
+  <header>
+    <h1><span class="dot" id="livedot"></span>contextdb · monitor + control</h1>
+    <select id="sessionSel" class="in"><option value="">all sessions</option></select>
+    <div class="spacer"></div>
+    <div class="stats">
+      <div class="stat"><div class="v" id="s_events">0</div><div class="k">events</div></div>
+      <div class="stat"><div class="v" id="s_in">0</div><div class="k">in tokens</div></div>
+      <div class="stat"><div class="v" id="s_out">0</div><div class="k">out tokens</div></div>
+      <div class="stat"><div class="v ctx" id="s_carry">0%</div><div class="k">ctx carryover</div></div>
+      <div class="stat"><div class="v" id="s_tools">0</div><div class="k">tool calls</div></div>
+      <div class="stat"><div class="v" id="s_err">0</div><div class="k">errors</div></div>
+    </div>
+  </header>
+
+  <!-- LIVE CONTROL PLANE -->
+  <div class="control">
+    <div class="ctl-group">
+      <div class="ctl-title">agent state</div>
+      <div class="row">
+        <span class="pill running" id="statePill"><span class="b"></span><span id="stateLbl">running</span></span>
+        <button class="btn" onclick="ctl({cmd:'pause'})">⏸ pause</button>
+        <button class="btn go" onclick="ctl({cmd:'resume'})">▶ resume</button>
+        <button class="btn" onclick="ctl({cmd:'step',n:1})">⤼ step</button>
+        <button class="btn stop" onclick="ctl({cmd:'abort'})">⏹ abort</button>
+        <button class="btn" onclick="ctl({cmd:'clear_abort'})">reset</button>
+      </div>
+      <div class="waiting" id="waitLbl"></div>
+    </div>
+
+    <div class="ctl-group">
+      <div class="ctl-title">patch a tool (change the scenario)</div>
+      <div class="row">
+        <input class="in" id="p_name" placeholder="tool name e.g. web_search" />
+        <select class="in" id="p_action"><option value="return">force return</option><option value="raise">inject error</option></select>
+        <input class="in" id="p_value" placeholder='value / message' />
+        <button class="btn" onclick="addPatch()">apply patch</button>
+      </div>
+      <div class="taglist" id="patchList"></div>
+    </div>
+
+    <div class="ctl-group">
+      <div class="ctl-title">breakpoint (pause before tool)</div>
+      <div class="row">
+        <input class="in" id="bp_name" placeholder="tool name" />
+        <button class="btn" onclick="addBreakpoint()">add</button>
+      </div>
+      <div class="taglist" id="bpList"></div>
+    </div>
+
+    <div class="ctl-group">
+      <div class="ctl-title">inject context (lands next turn)</div>
+      <div class="row">
+        <input class="in" id="c_kind" placeholder="source" value="dashboard_patch" style="width:110px" />
+        <input class="in" id="c_sum" placeholder="summary" style="width:200px" />
+        <input class="in" id="c_tok" placeholder="tokens" style="width:70px" />
+        <button class="btn" onclick="queueCtx()">queue</button>
+      </div>
+      <div class="taglist" id="ctxList"></div>
+    </div>
+  </div>
+
+  <div class="filters" id="filters"></div>
+  <div id="feed"><div class="empty" id="empty">waiting for your agent to do something…</div></div>
+
+<script>
+const TYPES = ["user_message","assistant_response","system_prompt","thinking",
+  "tool_call","function_call","context_injection","change","error"];
+const color = t => getComputedStyle(document.documentElement).getPropertyValue('--'+t).trim() || '#888';
+const state = { seen:new Set(), events:[], active:new Set(TYPES), session:"", sessions:new Set() };
+
+/* ---------- control plane ---------- */
+async function ctl(body){
+  try { await fetch('/control', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body)}); }
+  catch(e){ console.error('control failed', e); }
+}
+function addPatch(){
+  const name = document.getElementById('p_name').value.trim();
+  const action = document.getElementById('p_action').value;
+  const v = document.getElementById('p_value').value;
+  if(!name) return;
+  if(action==='return') ctl({cmd:'patch_tool', name, action, value:v});
+  else ctl({cmd:'patch_tool', name, action, error:v||('injected fault in '+name)});
+  document.getElementById('p_value').value='';
+}
+function addBreakpoint(){
+  const name = document.getElementById('bp_name').value.trim();
+  if(name){ ctl({cmd:'breakpoint', name, on:true}); document.getElementById('bp_name').value=''; }
+}
+function queueCtx(){
+  const source_kind = document.getElementById('c_kind').value.trim()||'dashboard_patch';
+  const summary = document.getElementById('c_sum').value.trim();
+  const tokens = parseInt(document.getElementById('c_tok').value,10)||0;
+  if(summary){ ctl({cmd:'queue_context', source_kind, summary, tokens}); document.getElementById('c_sum').value=''; document.getElementById('c_tok').value=''; }
+}
+function renderControl(st){
+  const pill = document.getElementById('statePill'), lbl = document.getElementById('stateLbl');
+  const mode = st.abort ? 'abort' : st.mode;
+  pill.className = 'pill ' + mode;
+  lbl.textContent = st.abort ? 'aborted' : st.mode;
+  document.getElementById('waitLbl').textContent =
+    (st.waiting_at ? '⏳ waiting at '+st.waiting_at : '') + (st.reason ? '  ·  '+st.reason : '');
+
+  const pl = document.getElementById('patchList'); pl.innerHTML='';
+  Object.entries(st.patches||{}).forEach(([name,p])=>{
+    const t=document.createElement('span'); t.className='tag patch';
+    const desc = p.action==='return' ? '→ '+JSON.stringify(p.value) : '✖ '+(p.error||'fault');
+    t.innerHTML = `${name} ${desc} <span class="x">✕</span>`;
+    t.querySelector('.x').onclick=()=>ctl({cmd:'clear_patch', name});
+    pl.appendChild(t);
+  });
+  const bl = document.getElementById('bpList'); bl.innerHTML='';
+  (st.breakpoints||[]).forEach(name=>{
+    const t=document.createElement('span'); t.className='tag bp';
+    t.innerHTML = `⦿ ${name} <span class="x">✕</span>`;
+    t.querySelector('.x').onclick=()=>ctl({cmd:'breakpoint', name, on:false});
+    bl.appendChild(t);
+  });
+  const cl = document.getElementById('ctxList'); cl.innerHTML='';
+  (st.pending_context||[]).forEach(c=>{
+    const t=document.createElement('span'); t.className='tag ctx';
+    t.textContent = `${c.source_kind}: ${c.summary} (${c.tokens} tok)`;
+    cl.appendChild(t);
+  });
+}
+
+/* ---------- filters ---------- */
+const filtersEl = document.getElementById('filters');
+TYPES.forEach(t => {
+  const c = document.createElement('div'); c.className='chip on'; c.dataset.type=t;
+  c.innerHTML = `<span class="swatch" style="background:${color(t)}"></span>${t.replace(/_/g,' ')}`;
+  c.onclick = () => { if(state.active.has(t)){state.active.delete(t);c.classList.replace('on','off');}
+    else {state.active.add(t);c.classList.replace('off','on');} rerender(); };
+  filtersEl.appendChild(c);
+});
+const sessionSel = document.getElementById('sessionSel');
+sessionSel.onchange = () => { state.session = sessionSel.value; rerender(); };
+
+/* ---------- event rendering ---------- */
+function esc(s){ return String(s).replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c])); }
+function pretty(v){ try{return JSON.stringify(v,null,2);}catch(e){return String(v);} }
+function visible(ev){ return state.active.has(ev.type) && (!state.session || ev.session_id===state.session); }
+
+function renderOne(ev){
+  const el = document.createElement('div'); el.className='ev'; el.style.borderLeftColor=color(ev.type);
+  el.dataset.id=ev.id;
+  const tin=ev.tokens?.input_tokens||0, tout=ev.tokens?.output_tokens||0;
+  const dur=ev.duration_ms!=null?` · ${ev.duration_ms.toFixed(1)}ms`:'';
+  const time=new Date(ev.timestamp_ms).toLocaleTimeString();
+  const patched = ev.metadata?.patched ? `<span class="patched">patched: ${ev.metadata.patched}</span>` : '';
+  let inner = `<div class="top">
+      <span class="badge" style="color:${color(ev.type)}">${ev.type.replace(/_/g,' ')}</span>
+      ${ev.name?`<span class="name">${esc(ev.name)}</span>`:''} ${patched}
+      <span class="spacer"></span>
+      <span class="toks">in <b>${tin}</b> · out <b>${tout}</b>${dur}</span>
+      <span class="meta">${time}</span></div>`;
+  if(ev.content!=null && typeof ev.content!=='object') inner += `<div class="body">${esc(ev.content)}</div>`;
+  else if(Array.isArray(ev.content) && ev.type!=='context_injection') inner += `<div class="body">${esc(ev.content.join('\n'))}</div>`;
+  if(ev.type==='context_injection' && ev.context_refs?.length){
+    inner += `<div class="refs">`+ev.context_refs.map(r=>
+      `<div class="ref"><span class="src">${esc(r.source_kind)}</span>
+        <span class="sum">${esc(r.summary)}</span>
+        <span class="t">${r.tokens} tok${r.source_id?` · ${esc(r.source_id)}`:''}</span></div>`).join('')+`</div>`;
+  }
+  if(ev.input_data!=null || ev.output_data!=null){
+    inner += `<details class="io"><summary>i/o</summary>`;
+    if(ev.input_data!=null) inner += `<pre>→ ${esc(pretty(ev.input_data))}</pre>`;
+    if(ev.output_data!=null) inner += `<pre>← ${esc(pretty(ev.output_data))}</pre>`;
+    inner += `</details>`;
+  }
+  if(ev.error) inner += `<div class="err">✖ ${esc(ev.error)}</div>`;
+  inner += `<div class="sid">session ${esc(ev.session_id.slice(0,12))}${ev.parent_id?` · ↳ ${esc(ev.parent_id.slice(0,8))}`:''}</div>`;
+  el.innerHTML = inner; return el;
+}
+function updateStats(){
+  const evs = state.session ? state.events.filter(e=>e.session_id===state.session) : state.events;
+  let tin=0,tout=0,carry=0,tools=0,errs=0;
+  for(const e of evs){ tin+=e.tokens?.input_tokens||0; tout+=e.tokens?.output_tokens||0;
+    if(e.type==='context_injection') carry+=e.tokens?.input_tokens||0;
+    if((e.type==='tool_call'||e.type==='function_call') && !e.metadata?.is_turn) tools++;
+    if(e.error) errs++; }
+  document.getElementById('s_events').textContent=evs.length;
+  document.getElementById('s_in').textContent=tin;
+  document.getElementById('s_out').textContent=tout;
+  document.getElementById('s_carry').textContent= tin?Math.round(100*carry/tin)+'%':'0%';
+  document.getElementById('s_tools').textContent=tools;
+  const errEl=document.getElementById('s_err'); errEl.textContent=errs; errEl.className='v'+(errs?' warn':'');
+}
+function rerender(){
+  const feed=document.getElementById('feed'); feed.innerHTML='';
+  const shown=state.events.filter(visible);
+  if(!shown.length) feed.innerHTML='<div class="empty">no events match the current filters</div>';
+  else shown.forEach(ev=>feed.appendChild(renderOne(ev)));
+  updateStats(); window.scrollTo(0,document.body.scrollHeight);
+}
+function ingest(ev){
+  if(state.seen.has(ev.id)) return; state.seen.add(ev.id); state.events.push(ev);
+  if(!state.sessions.has(ev.session_id)){ state.sessions.add(ev.session_id);
+    const o=document.createElement('option'); o.value=ev.session_id; o.textContent='session '+ev.session_id.slice(0,12); sessionSel.appendChild(o); }
+  const atBottom = window.innerHeight+window.scrollY >= document.body.scrollHeight-120;
+  if(visible(ev)){ const empty=document.getElementById('empty'); if(empty) empty.remove();
+    document.getElementById('feed').appendChild(renderOne(ev)); if(atBottom) window.scrollTo(0,document.body.scrollHeight); }
+  updateStats();
+}
+
+/* ---------- SSE ---------- */
+const es = new EventSource('/events');
+const dot = document.getElementById('livedot');
+es.onopen = () => dot.classList.add('live');
+es.onerror = () => dot.classList.remove('live');
+es.onmessage = e => { try{ ingest(JSON.parse(e.data)); }catch(err){ console.error(err,e.data); } };
+es.addEventListener('control', e => { try{ renderControl(JSON.parse(e.data)); }catch(err){ console.error(err); } });
+</script>
+</body>
+</html>

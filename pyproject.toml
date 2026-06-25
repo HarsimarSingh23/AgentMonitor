@@ -1,0 +1,26 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "contextdb"
+version = "0.1.0"
+description = "In-memory observability database for LLM agents: logs tool calls, messages, thinking, responses, tokens, and carried-in context."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+dependencies = []
+
+[project.optional-dependencies]
+tokens = ["tiktoken>=0.5"]
+dev = ["pytest>=7"]
+
+[tool.setuptools.packages.find]
+include = ["contextdb*"]
+
+[tool.setuptools.package-data]
+contextdb = ["static/*.html"]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]
