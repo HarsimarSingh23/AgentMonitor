@@ -83,7 +83,7 @@ def session(
     """Open a new session on the default store (or a given one)."""
 
     return Session(
-        store or get_store(),
+        store if store is not None else get_store(),
         session_id=session_id,
         parent_session_id=parent_session_id,
         metadata=metadata,
@@ -93,4 +93,4 @@ def session(
 def insights(store: Optional[EventStore] = None) -> Insights:
     """Analytics over the default store (or a given one)."""
 
-    return Insights(store or get_store())
+    return Insights(store if store is not None else get_store())

@@ -146,6 +146,70 @@ requests.post("http://127.0.0.1:8765/control", json={"cmd": "resume"})
 …or from Python directly via `cdb.get_control()` (`pause()`, `step()`,
 `patch_tool()`, `set_breakpoint()`, `queue_context()`, `abort()`).
 
+## Capturing real agents (adapters)
+
+`@log_tool` covers code you write. To observe *real* agents, `contextdb.adapters`
+plugs into three sources. A note on reach: a model's hidden chain-of-thought
+only leaves the provider when you ask for it — so **reasoning capture comes from
+the Anthropic SDK with extended thinking**, while Claude Code hooks/transcripts
+give you tool calls, results, prompts, and token usage.
+
+### 1. Anthropic SDK — logs the agent's actual thinking
+
+```python
+import anthropic, contextdb as cdb
+from contextdb.adapters.anthropic_sdk import log_response
+
+client = anthropic.Anthropic()
+with cdb.session() as s:
+    s.log_user_message(prompt)
+    resp = client.messages.create(
+        model="claude-opus-4-8", max_tokens=1024,
+        thinking={"type": "enabled", "budget_tokens": 2048},
+        messages=[{"role": "user", "content": prompt}],
+    )
+    log_response(s, resp)   # thinking blocks → THINKING, tool_use → TOOL_CALL, text → response
+```
+
+`log_response` / `stream_log` handle non-streaming and streaming responses;
+`mock_response()` lets the demo run with **no API key**:
+
+```bash
+python -m examples.anthropic_demo
+```
+
+### 2. Claude Code hooks — watch a live Claude Code agent
+
+Start the collector, register the hook, and work as usual:
+
+```bash
+python -m contextdb        # collector + dashboard at http://127.0.0.1:8765
+```
+
+Add to `.claude/settings.json` (or get it from `claude_code_hooks.settings_snippet()`):
+
+```json
+{
+  "hooks": {
+    "UserPromptSubmit": [{"hooks": [{"type": "command", "command": "python -m contextdb.adapters.claude_code_hooks"}]}],
+    "PostToolUse":      [{"hooks": [{"type": "command", "command": "python -m contextdb.adapters.claude_code_hooks"}]}],
+    "Stop":             [{"hooks": [{"type": "command", "command": "python -m contextdb.adapters.claude_code_hooks"}]}]
+  }
+}
+```
+
+Each hook ships its payload to the collector's `/ingest` endpoint. The hook
+never raises into Claude Code — if the collector is down it exits cleanly.
+
+### 3. Transcript import — analyze past sessions
+
+```bash
+python -m contextdb.adapters.transcript_import ~/.claude/projects/<slug>/<session>.jsonl
+```
+
+Replays a recorded session (`text` / `thinking` / `tool_use` blocks, tool
+results, token usage) into a store and prints the `Insights` report.
+
 ## Persistence
 
 The store is in-memory, but you can snapshot it for later analysis:
@@ -167,6 +231,7 @@ cdb.get_store().to_sqlite("run.sqlite")   # then query with plain SQL
 | `insights.py` | analytics over the timeline |
 | `dashboard.py` + `static/dashboard.html` | live SSE monitoring dashboard + control endpoints |
 | `control.py` | live control plane: pause/step, breakpoints, tool patches, context injection, abort |
+| `adapters/` | feed real agents in: Anthropic SDK (incl. thinking), Claude Code hooks, transcript import |
 
 ## Run the demo / tests
 

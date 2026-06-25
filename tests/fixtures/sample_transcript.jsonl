@@ -1,0 +1,6 @@
+{"type": "user", "message": {"role": "user", "content": [{"type": "text", "text": "Find docs about HTTP retries and summarize."}]}}
+{"type": "assistant", "message": {"role": "assistant", "usage": {"input_tokens": 420, "output_tokens": 60}, "content": [{"type": "thinking", "thinking": "I should search the internal docs first, then summarize the findings."}, {"type": "tool_use", "id": "toolu_a1", "name": "Grep", "input": {"pattern": "retry", "path": "docs/"}}]}}
+{"type": "user", "message": {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "toolu_a1", "content": "docs/retries.md\ndocs/backoff.md"}]}}
+{"type": "assistant", "message": {"role": "assistant", "usage": {"input_tokens": 510, "output_tokens": 30}, "content": [{"type": "tool_use", "id": "toolu_a2", "name": "Read", "input": {"file_path": "docs/retries.md"}}]}}
+{"type": "user", "message": {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "toolu_a2", "content": "Use exponential backoff with full jitter."}]}}
+{"type": "assistant", "message": {"role": "assistant", "usage": {"input_tokens": 560, "output_tokens": 48}, "content": [{"type": "text", "text": "The docs recommend exponential backoff with full jitter for HTTP retries."}]}}
