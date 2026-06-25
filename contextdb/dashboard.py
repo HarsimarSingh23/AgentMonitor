@@ -148,7 +148,7 @@ def _make_handler(broker: _Broker):
 
         def do_POST(self) -> None:  # noqa: N802
             path = self.path.split("?", 1)[0]
-            if path != "/control":
+            if path not in ("/control", "/ingest"):
                 self.send_error(404)
                 return
             length = int(self.headers.get("Content-Length", 0) or 0)
@@ -157,9 +157,59 @@ def _make_handler(broker: _Broker):
             except (ValueError, json.JSONDecodeError):
                 self.send_error(400, "invalid JSON")
                 return
-            self._send_json(_dispatch_control(broker.control, body))
+            if path == "/control":
+                self._send_json(_dispatch_control(broker.control, body))
+            else:  # /ingest — push an externally-produced event into the store
+                ev = _event_from_payload(body, broker.store)
+                self._send_json({"ok": True, "id": ev.id})
 
     return Handler
+
+
+def _event_from_payload(body: dict, store: EventStore):
+    """Build and store an Event from a JSON payload (used by /ingest).
+
+    Lets external producers — Claude Code hooks, log shippers, other languages —
+    feed the live dashboard over plain HTTP. Token counts are estimated from the
+    payload when not supplied.
+    """
+
+    from .models import Event, EventType, TokenUsage
+    from .tokens import count_tokens
+
+    try:
+        etype = EventType(body.get("type", "function_call"))
+    except ValueError:
+        etype = EventType.FUNCTION_CALL
+
+    content = body.get("content")
+    input_data = body.get("input_data")
+    output_data = body.get("output_data")
+    in_tok = body.get("input_tokens")
+    out_tok = body.get("output_tokens")
+    if in_tok is None:
+        in_tok = count_tokens(input_data) if input_data is not None else count_tokens(
+            content if etype in (EventType.USER_MESSAGE, EventType.SYSTEM_PROMPT,
+                                 EventType.CONTEXT_INJECTION) else None
+        )
+    if out_tok is None:
+        out_tok = count_tokens(output_data) if output_data is not None else count_tokens(
+            content if etype in (EventType.ASSISTANT_RESPONSE, EventType.THINKING) else None
+        )
+
+    ev = Event(
+        type=etype,
+        session_id=body.get("session_id", "ingested"),
+        name=body.get("name", ""),
+        content=content,
+        input_data=input_data,
+        output_data=output_data,
+        tokens=TokenUsage(input_tokens=int(in_tok or 0), output_tokens=int(out_tok or 0)),
+        parent_id=body.get("parent_id"),
+        error=body.get("error"),
+        metadata=body.get("metadata") or {},
+    )
+    return store.add(ev)
 
 
 def _coerce_value(value):
@@ -226,7 +276,7 @@ def serve(
     from .control import get_control
     from .decorators import get_store
 
-    store = store or get_store()
+    store = store if store is not None else get_store()
     broker = _Broker(store, get_control())
     httpd = ThreadingHTTPServer((host, port), _make_handler(broker))
     url = f"http://{host}:{port}/"
